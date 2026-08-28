@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json());
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.CORS_URL,
   }),
 );
 
@@ -39,5 +39,5 @@ app.get("/api/health", (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Sarthi API running on http://localhost:${PORT}`);
+  console.log(`Sarthi API running on ${process.env.SERVER_URL}:${PORT}`);
 });
