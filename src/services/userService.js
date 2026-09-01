@@ -3,9 +3,61 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
 /**
+ * Standardize user document format across all queries and operations.
+ * Always returns consistent null-coalesced fields.
+ * @param {import("firebase-admin/firestore").DocumentSnapshot | object} docOrData
+ * @param {string} [docId]
+ * @returns {object}
+ */
+function formatUser(docOrData, docId) {
+  if (!docOrData) return null;
+
+  const data =
+    typeof docOrData.data === "function" ? docOrData.data() : docOrData;
+  const id = docOrData.id || docId || data.id || data.username || null;
+
+  let name = data.name;
+  if (!name && data.otherdata) {
+    if (data.otherdata.firstName || data.otherdata.lastName) {
+      name = [data.otherdata.firstName, data.otherdata.lastName]
+        .filter(Boolean)
+        .join(" ");
+    } else if (data.otherdata.name) {
+      name = data.otherdata.name;
+    }
+  }
+
+  return {
+    id: id,
+    createdAt:
+      data.createdAt !== undefined && data.createdAt !== ""
+        ? data.createdAt
+        : null,
+    email: data.email !== undefined && data.email !== "" ? data.email : null,
+    name: name !== undefined && name !== "" ? name : null,
+    username: data.username || id || null,
+    role: data.role || "user",
+    totpKey:
+      data.totpKey !== undefined && data.totpKey !== "" ? data.totpKey : null,
+    password:
+      data.password !== undefined && data.password !== ""
+        ? data.password
+        : null,
+    resetCode:
+      data.resetCode !== undefined && data.resetCode !== ""
+        ? data.resetCode
+        : null,
+    resetExpiry:
+      data.resetExpiry !== undefined && data.resetExpiry !== ""
+        ? data.resetExpiry
+        : null,
+  };
+}
+
+/**
  * Fetch user details from Firestore by username.
  * @param {string} username
- * @returns {Promise<object|null>} user details or null if not found
+ * @returns {Promise<object|null>} user details in standard format or null if not found
  */
 async function getUserByUsername(username) {
   if (!username) {
@@ -20,16 +72,15 @@ async function getUserByUsername(username) {
       .get();
 
     if (snapshot.empty) {
+      // Also try fetching by doc ID in case username was passed as document ID
+      const directDoc = await usersRef.doc(username).get();
+      if (directDoc.exists) {
+        return formatUser(directDoc);
+      }
       return null;
     }
 
-    const doc = snapshot.docs[0];
-    const data = doc.data();
-
-    return {
-      id: doc.id,
-      ...data,
-    };
+    return formatUser(snapshot.docs[0]);
   } catch (error) {
     console.error("Error in getUserByUsername:", error);
     throw error;
@@ -89,10 +140,7 @@ async function resetPassword(
     }
 
     const updatedDoc = await docRef.get();
-    return {
-      id: updatedDoc.id,
-      ...updatedDoc.data(),
-    };
+    return formatUser(updatedDoc);
   } catch (error) {
     console.error("Error in resetPassword:", error);
     throw error;
@@ -146,8 +194,8 @@ async function generateUserResetCode(username) {
 }
 
 /**
- * Fetch all users from Firestore and return their username, name, role, and email.
- * @returns {Promise<Array<{username: string, name: string, role: string, email: string}>>}
+ * Fetch all users from Firestore in standardized format.
+ * @returns {Promise<Array<object>>}
  */
 async function getAllUsers() {
   try {
@@ -158,31 +206,7 @@ async function getAllUsers() {
       return [];
     }
 
-    const users = snapshot.docs.map((doc) => {
-      const data = doc.data();
-
-      // Extract formatted name from direct field or otherdata
-      let name = data.name || "";
-      if (!name && data.otherdata) {
-        if (data.otherdata.firstName || data.otherdata.lastName) {
-          name = [data.otherdata.firstName, data.otherdata.lastName]
-            .filter(Boolean)
-            .join(" ");
-        } else if (data.otherdata.name) {
-          name = data.otherdata.name;
-        }
-      }
-
-      return {
-        id: doc.id,
-        username: data.username || doc.id,
-        name: name || "",
-        role: data.role || "user",
-        email: data.email || "",
-      };
-    });
-
-    return users;
+    return snapshot.docs.map((doc) => formatUser(doc));
   } catch (error) {
     console.error("Error in getAllUsers:", error);
     throw error;
@@ -210,11 +234,7 @@ async function getUserByEmail(email) {
       return null;
     }
 
-    const doc = snapshot.docs[0];
-    return {
-      id: doc.id,
-      ...doc.data(),
-    };
+    return formatUser(snapshot.docs[0]);
   } catch (error) {
     console.error("Error in getUserByEmail:", error);
     throw error;
@@ -222,7 +242,9 @@ async function getUserByEmail(email) {
 }
 
 /**
- * Create a new user in Firestore.
+ * Create a new user in Firestore with an auto-assigned long document ID.
+ * Stores: createdAt, email, name, username, role, totpKey, password, resetCode, resetExpiry.
+ * Missing data is defaulted to null.
  * @param {object} userData
  * @param {string} userData.username
  * @param {string} [userData.name]
@@ -230,8 +252,9 @@ async function getUserByEmail(email) {
  * @param {string} userData.email
  * @param {string} [userData.password]
  * @param {string} [userData.totpKey]
- * @param {object} [userData.otherdata]
- * @returns {Promise<object>} created user details
+ * @param {string} [userData.resetCode]
+ * @param {string|number} [userData.resetExpiry]
+ * @returns {Promise<object>} created user details with auto-assigned id
  */
 async function createUser({
   username,
@@ -240,7 +263,8 @@ async function createUser({
   email,
   password,
   totpKey,
-  otherdata = {},
+  resetCode,
+  resetExpiry,
 }) {
   if (!username) {
     throw new Error("Username is required");
@@ -249,44 +273,48 @@ async function createUser({
     throw new Error("Email is required");
   }
 
-  const cleanUsername = username.trim();
-  const cleanEmail = email.trim().toLowerCase();
-  const cleanRole = (role || "user").trim();
-  const cleanName = (name || "").trim();
+  const cleanUsername = username ? String(username).trim() : null;
+  const cleanEmail = email ? String(email).trim().toLowerCase() : null;
+  const cleanRole = role && String(role).trim() ? String(role).trim() : "user";
+  const cleanName = name && String(name).trim() ? String(name).trim() : null;
+  const cleanTotpKey =
+    totpKey && String(totpKey).trim() ? String(totpKey).trim() : null;
 
   try {
     // Hash password if provided
-    let finalPassword = password;
-    if (finalPassword) {
-      finalPassword = bcrypt.hashSync(finalPassword, 10);
+    let finalPassword = null;
+    if (password && String(password).trim()) {
+      finalPassword = bcrypt.hashSync(String(password), 10);
     }
 
+    const cleanResetCode =
+      resetCode !== undefined && resetCode !== null && String(resetCode).trim()
+        ? String(resetCode).trim()
+        : null;
+
+    const cleanResetExpiry =
+      resetExpiry !== undefined && resetExpiry !== null && resetExpiry !== ""
+        ? resetExpiry
+        : null;
+
+    // Store only specified fields; missing data defaults to null
     const userDoc = {
-      username: cleanUsername,
-      name: cleanName,
-      email: cleanEmail,
-      role: cleanRole,
-      password: finalPassword || "",
-      totpKey: totpKey || "",
-      otherdata: {
-        name: cleanName,
-        ...otherdata,
-      },
       createdAt: new Date().toISOString(),
-    };
-
-    // Save using cleanUsername as document ID
-    const usersRef = db.collection("users");
-    await usersRef.doc(cleanUsername).set(userDoc);
-
-    return {
-      id: cleanUsername,
-      username: cleanUsername,
-      name: cleanName,
-      role: cleanRole,
       email: cleanEmail,
-      createdAt: userDoc.createdAt,
+      name: cleanName,
+      username: cleanUsername,
+      role: cleanRole,
+      totpKey: cleanTotpKey,
+      password: finalPassword,
+      resetCode: cleanResetCode,
+      resetExpiry: cleanResetExpiry,
     };
+
+    // Auto-assign long document ID using .add()
+    const usersRef = db.collection("users");
+    const docRef = await usersRef.add(userDoc);
+
+    return formatUser(userDoc, docRef.id);
   } catch (error) {
     console.error("Error in createUser:", error);
     throw error;
@@ -380,12 +408,7 @@ async function editUser({ id, name, email, role, username }) {
     };
 
     if (name !== undefined && name !== null) {
-      const cleanName = String(name).trim();
-      updateData.name = cleanName;
-      updateData.otherdata = {
-        ...(currentData.otherdata || {}),
-        name: cleanName,
-      };
+      updateData.name = String(name).trim();
     }
 
     if (email !== undefined && email !== null) {
@@ -403,27 +426,7 @@ async function editUser({ id, name, email, role, username }) {
     await docRef.update(updateData);
 
     const updatedSnap = await docRef.get();
-    const data = updatedSnap.data();
-
-    let formattedName = data.name || "";
-    if (!formattedName && data.otherdata) {
-      if (data.otherdata.firstName || data.otherdata.lastName) {
-        formattedName = [data.otherdata.firstName, data.otherdata.lastName]
-          .filter(Boolean)
-          .join(" ");
-      } else if (data.otherdata.name) {
-        formattedName = data.otherdata.name;
-      }
-    }
-
-    return {
-      id: docRef.id,
-      username: data.username || docRef.id,
-      name: formattedName,
-      role: data.role || "user",
-      email: data.email || "",
-      updatedAt: data.updatedAt,
-    };
+    return formatUser(updatedSnap);
   } catch (error) {
     console.error("Error in editUser:", error);
     throw error;
@@ -438,4 +441,5 @@ module.exports = {
   editUser,
   resetPassword,
   generateUserResetCode,
+  formatUser,
 };

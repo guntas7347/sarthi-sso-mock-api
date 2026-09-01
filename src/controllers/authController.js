@@ -239,7 +239,9 @@ async function createUser(req, res) {
     });
   }
 
-  const { username, name, role, email } = req.body || {};
+  const { username, name, role, email, password, totpKey } = req.body || {};
+  const resetCode = req.body?.resetCode || req.body?.resetcode;
+  const resetExpiry = req.body?.resetExpiry || req.body?.resetexpiry;
 
   if (!username || typeof username !== "string" || !username.trim()) {
     return res.status(400).json({
@@ -276,9 +278,13 @@ async function createUser(req, res) {
 
     const newUser = await userService.createUser({
       username: username.trim(),
-      name: name ? String(name).trim() : "",
-      role: role ? String(role).trim() : "user",
+      name,
+      role,
       email: email.trim(),
+      password,
+      totpKey,
+      resetCode,
+      resetExpiry,
     });
 
     console.log(`Successfully created user: ${newUser.username}`);
