@@ -280,6 +280,7 @@ async function createUser({
     await usersRef.doc(cleanUsername).set(userDoc);
 
     return {
+      id: cleanUsername,
       username: cleanUsername,
       name: cleanName,
       role: cleanRole,
@@ -292,11 +293,149 @@ async function createUser({
   }
 }
 
+/**
+ * Edit an existing user in Firestore.
+ * @param {object} updateParams
+ * @param {string} updateParams.id - The Firestore document ID or identifier
+ * @param {string} [updateParams.name]
+ * @param {string} [updateParams.email]
+ * @param {string} [updateParams.role]
+ * @param {string} [updateParams.username]
+ * @returns {Promise<object|null>} updated user details or null if not found
+ */
+async function editUser({ id, name, email, role, username }) {
+  if (!id) {
+    throw new Error("User ID is required");
+  }
+
+  try {
+    const usersRef = db.collection("users");
+    let docRef = usersRef.doc(id);
+    let docSnap = await docRef.get();
+
+    // If not found by doc.id directly, try finding by username field
+    if (!docSnap.exists) {
+      const querySnap = await usersRef
+        .where("username", "==", id)
+        .limit(1)
+        .get();
+      if (!querySnap.empty) {
+        docRef = querySnap.docs[0].ref;
+        docSnap = querySnap.docs[0];
+      } else {
+        return null;
+      }
+    }
+
+    const currentData = docSnap.data();
+
+    // Check duplicate email if email is being updated and differs from current
+    if (
+      email !== undefined &&
+      email !== null &&
+      email.trim().toLowerCase() !== (currentData.email || "").toLowerCase()
+    ) {
+      const cleanEmail = email.trim().toLowerCase();
+      const existingEmailSnap = await usersRef
+        .where("email", "==", cleanEmail)
+        .limit(1)
+        .get();
+      if (
+        !existingEmailSnap.empty &&
+        existingEmailSnap.docs[0].id !== docRef.id
+      ) {
+        const error = new Error(
+          `Email '${cleanEmail}' is already in use by another user`,
+        );
+        error.code = "DUPLICATE_EMAIL";
+        throw error;
+      }
+    }
+
+    // Check duplicate username if username is being updated and differs from current
+    if (
+      username !== undefined &&
+      username !== null &&
+      username.trim() !== currentData.username
+    ) {
+      const cleanUsername = username.trim();
+      const existingUsernameSnap = await usersRef
+        .where("username", "==", cleanUsername)
+        .limit(1)
+        .get();
+      if (
+        !existingUsernameSnap.empty &&
+        existingUsernameSnap.docs[0].id !== docRef.id
+      ) {
+        const error = new Error(
+          `Username '${cleanUsername}' is already in use by another user`,
+        );
+        error.code = "DUPLICATE_USERNAME";
+        throw error;
+      }
+    }
+
+    const updateData = {
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (name !== undefined && name !== null) {
+      const cleanName = String(name).trim();
+      updateData.name = cleanName;
+      updateData.otherdata = {
+        ...(currentData.otherdata || {}),
+        name: cleanName,
+      };
+    }
+
+    if (email !== undefined && email !== null) {
+      updateData.email = String(email).trim().toLowerCase();
+    }
+
+    if (role !== undefined && role !== null) {
+      updateData.role = String(role).trim();
+    }
+
+    if (username !== undefined && username !== null) {
+      updateData.username = String(username).trim();
+    }
+
+    await docRef.update(updateData);
+
+    const updatedSnap = await docRef.get();
+    const data = updatedSnap.data();
+
+    let formattedName = data.name || "";
+    if (!formattedName && data.otherdata) {
+      if (data.otherdata.firstName || data.otherdata.lastName) {
+        formattedName = [data.otherdata.firstName, data.otherdata.lastName]
+          .filter(Boolean)
+          .join(" ");
+      } else if (data.otherdata.name) {
+        formattedName = data.otherdata.name;
+      }
+    }
+
+    return {
+      id: docRef.id,
+      username: data.username || docRef.id,
+      name: formattedName,
+      role: data.role || "user",
+      email: data.email || "",
+      updatedAt: data.updatedAt,
+    };
+  } catch (error) {
+    console.error("Error in editUser:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   getUserByUsername,
   getUserByEmail,
   getAllUsers,
   createUser,
+  editUser,
   resetPassword,
   generateUserResetCode,
 };

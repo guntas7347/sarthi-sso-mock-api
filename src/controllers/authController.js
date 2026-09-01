@@ -5,11 +5,16 @@ const ALLOWED_API_KEYS = ["asnjhijcs", "asnjhijc"];
 
 /**
  * Helper to validate the API key from body, headers, or query parameters.
- * @param {import("express").Request} req 
+ * @param {import("express").Request} req
  * @returns {boolean}
  */
 function isValidApiKey(req) {
-  let apiKey = req.body?.apiKey || req.body?.apikey || req.headers["x-api-key"] || req.query?.apiKey || req.query?.apikey;
+  let apiKey =
+    req.body?.apiKey ||
+    req.body?.apikey ||
+    req.headers["x-api-key"] ||
+    req.query?.apiKey ||
+    req.query?.apikey;
 
   if (!apiKey && req.headers["authorization"]) {
     const parts = req.headers["authorization"].split(" ");
@@ -26,8 +31,8 @@ function isValidApiKey(req) {
 /**
  * Get user details by username from Firestore.
  * Requires username and the correct API Key.
- * @param {import("express").Request} req 
- * @param {import("express").Response} res 
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
  */
 async function getUser(req, res) {
   if (!isValidApiKey(req)) {
@@ -38,7 +43,8 @@ async function getUser(req, res) {
     });
   }
 
-  const username = req.body?.username || req.query?.username || req.params?.username;
+  const username =
+    req.body?.username || req.query?.username || req.params?.username;
 
   if (!username) {
     console.log("Username is required but was not provided");
@@ -77,8 +83,8 @@ async function getUser(req, res) {
 /**
  * Reset user password and update totp, resetcode, resetexpiry.
  * Requires username, API Key, and update fields.
- * @param {import("express").Request} req 
- * @param {import("express").Response} res 
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
  */
 async function resetPassword(req, res) {
   if (!isValidApiKey(req)) {
@@ -103,7 +109,13 @@ async function resetPassword(req, res) {
   }
 
   try {
-    const updatedUser = await userService.resetPassword(username, newPassword, totp, resetCode, resetExpiry);
+    const updatedUser = await userService.resetPassword(
+      username,
+      newPassword,
+      totp,
+      resetCode,
+      resetExpiry,
+    );
 
     if (!updatedUser) {
       console.log(`User '${username}' not found for password reset`);
@@ -132,8 +144,8 @@ async function resetPassword(req, res) {
 /**
  * Generate a random reset code, save it in the database for the user, and return it.
  * Requires username and correct API Key.
- * @param {import("express").Request} req 
- * @param {import("express").Response} res 
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
  */
 async function generateResetCode(req, res) {
   if (!isValidApiKey(req)) {
@@ -181,8 +193,8 @@ async function generateResetCode(req, res) {
 
 /**
  * Get all users with their username, name, role, and email.
- * @param {import("express").Request} req 
- * @param {import("express").Response} res 
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
  */
 async function getAllUsers(req, res) {
   if (!isValidApiKey(req)) {
@@ -215,8 +227,8 @@ async function getAllUsers(req, res) {
 /**
  * Create a new user.
  * Takes username, name, role, email (and optional password, totpKey, otherdata).
- * @param {import("express").Request} req 
- * @param {import("express").Response} res 
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
  */
 async function createUser(req, res) {
   if (!isValidApiKey(req)) {
@@ -227,7 +239,7 @@ async function createUser(req, res) {
     });
   }
 
-  const { username, name, role, email, password, totpKey, otherdata } = req.body || {};
+  const { username, name, role, email } = req.body || {};
 
   if (!username || typeof username !== "string" || !username.trim()) {
     return res.status(400).json({
@@ -267,9 +279,6 @@ async function createUser(req, res) {
       name: name ? String(name).trim() : "",
       role: role ? String(role).trim() : "user",
       email: email.trim(),
-      password,
-      totpKey,
-      otherdata,
     });
 
     console.log(`Successfully created user: ${newUser.username}`);
@@ -288,11 +297,74 @@ async function createUser(req, res) {
   }
 }
 
+/**
+ * Edit user details by ID.
+ * Body: id, name, email, role, username.
+ * @param {import("express").Request} req 
+ * @param {import("express").Response} res 
+ */
+async function editUser(req, res) {
+  if (!isValidApiKey(req)) {
+    console.log("Unauthorized request: missing or invalid API key");
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or missing API key",
+    });
+  }
+
+  const { id, name, email, role, username } = req.body || {};
+
+  if (!id || typeof id !== "string" || !id.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "User ID (id) is required",
+    });
+  }
+
+  try {
+    const updatedUser = await userService.editUser({
+      id: id.trim(),
+      name,
+      email,
+      role,
+      username,
+    });
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: `User with ID '${id.trim()}' not found`,
+      });
+    }
+
+    console.log(`Successfully updated user: ${id.trim()}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      user: updatedUser,
+    });
+  } catch (error) {
+    if (error.code === "DUPLICATE_EMAIL" || error.code === "DUPLICATE_USERNAME") {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    console.error("EditUser controller error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+
 module.exports = {
   getUser,
   getAllUsers,
   createUser,
+  editUser,
   resetPassword,
   generateResetCode,
 };
-
