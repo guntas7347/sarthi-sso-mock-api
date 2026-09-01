@@ -145,8 +145,158 @@ async function generateUserResetCode(username) {
   }
 }
 
+/**
+ * Fetch all users from Firestore and return their username, name, role, and email.
+ * @returns {Promise<Array<{username: string, name: string, role: string, email: string}>>}
+ */
+async function getAllUsers() {
+  try {
+    const usersRef = db.collection("users");
+    const snapshot = await usersRef.get();
+
+    if (snapshot.empty) {
+      return [];
+    }
+
+    const users = snapshot.docs.map((doc) => {
+      const data = doc.data();
+
+      // Extract formatted name from direct field or otherdata
+      let name = data.name || "";
+      if (!name && data.otherdata) {
+        if (data.otherdata.firstName || data.otherdata.lastName) {
+          name = [data.otherdata.firstName, data.otherdata.lastName]
+            .filter(Boolean)
+            .join(" ");
+        } else if (data.otherdata.name) {
+          name = data.otherdata.name;
+        }
+      }
+
+      return {
+        id: doc.id,
+        username: data.username || doc.id,
+        name: name || "",
+        role: data.role || "user",
+        email: data.email || "",
+      };
+    });
+
+    return users;
+  } catch (error) {
+    console.error("Error in getAllUsers:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch user details from Firestore by email.
+ * @param {string} email
+ * @returns {Promise<object|null>} user details or null if not found
+ */
+async function getUserByEmail(email) {
+  if (!email) {
+    return null;
+  }
+
+  try {
+    const usersRef = db.collection("users");
+    const snapshot = await usersRef
+      .where("email", "==", email.trim().toLowerCase())
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return null;
+    }
+
+    const doc = snapshot.docs[0];
+    return {
+      id: doc.id,
+      ...doc.data(),
+    };
+  } catch (error) {
+    console.error("Error in getUserByEmail:", error);
+    throw error;
+  }
+}
+
+/**
+ * Create a new user in Firestore.
+ * @param {object} userData
+ * @param {string} userData.username
+ * @param {string} [userData.name]
+ * @param {string} [userData.role]
+ * @param {string} userData.email
+ * @param {string} [userData.password]
+ * @param {string} [userData.totpKey]
+ * @param {object} [userData.otherdata]
+ * @returns {Promise<object>} created user details
+ */
+async function createUser({
+  username,
+  name,
+  role = "user",
+  email,
+  password,
+  totpKey,
+  otherdata = {},
+}) {
+  if (!username) {
+    throw new Error("Username is required");
+  }
+  if (!email) {
+    throw new Error("Email is required");
+  }
+
+  const cleanUsername = username.trim();
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanRole = (role || "user").trim();
+  const cleanName = (name || "").trim();
+
+  try {
+    // Hash password if provided
+    let finalPassword = password;
+    if (finalPassword) {
+      finalPassword = bcrypt.hashSync(finalPassword, 10);
+    }
+
+    const userDoc = {
+      username: cleanUsername,
+      name: cleanName,
+      email: cleanEmail,
+      role: cleanRole,
+      password: finalPassword || "",
+      totpKey: totpKey || "",
+      otherdata: {
+        name: cleanName,
+        ...otherdata,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    // Save using cleanUsername as document ID
+    const usersRef = db.collection("users");
+    await usersRef.doc(cleanUsername).set(userDoc);
+
+    return {
+      username: cleanUsername,
+      name: cleanName,
+      role: cleanRole,
+      email: cleanEmail,
+      createdAt: userDoc.createdAt,
+    };
+  } catch (error) {
+    console.error("Error in createUser:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   getUserByUsername,
+  getUserByEmail,
+  getAllUsers,
+  createUser,
   resetPassword,
   generateUserResetCode,
 };

@@ -179,8 +179,119 @@ async function generateResetCode(req, res) {
   }
 }
 
+/**
+ * Get all users with their username, name, role, and email.
+ * @param {import("express").Request} req 
+ * @param {import("express").Response} res 
+ */
+async function getAllUsers(req, res) {
+  if (!isValidApiKey(req)) {
+    console.log("Unauthorized request: missing or invalid API key");
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or missing API key",
+    });
+  }
+
+  try {
+    const users = await userService.getAllUsers();
+
+    console.log(`Successfully fetched ${users.length} users`);
+
+    return res.status(200).json({
+      success: true,
+      count: users.length,
+      users,
+    });
+  } catch (error) {
+    console.error("GetAllUsers controller error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+
+/**
+ * Create a new user.
+ * Takes username, name, role, email (and optional password, totpKey, otherdata).
+ * @param {import("express").Request} req 
+ * @param {import("express").Response} res 
+ */
+async function createUser(req, res) {
+  if (!isValidApiKey(req)) {
+    console.log("Unauthorized request: missing or invalid API key");
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or missing API key",
+    });
+  }
+
+  const { username, name, role, email, password, totpKey, otherdata } = req.body || {};
+
+  if (!username || typeof username !== "string" || !username.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "Username is required",
+    });
+  }
+
+  if (!email || typeof email !== "string" || !email.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "Email is required",
+    });
+  }
+
+  try {
+    // Check if username already exists
+    const existingUser = await userService.getUserByUsername(username.trim());
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: `User with username '${username.trim()}' already exists`,
+      });
+    }
+
+    // Check if email already exists
+    const existingEmailUser = await userService.getUserByEmail(email.trim());
+    if (existingEmailUser) {
+      return res.status(409).json({
+        success: false,
+        message: `User with email '${email.trim()}' already exists`,
+      });
+    }
+
+    const newUser = await userService.createUser({
+      username: username.trim(),
+      name: name ? String(name).trim() : "",
+      role: role ? String(role).trim() : "user",
+      email: email.trim(),
+      password,
+      totpKey,
+      otherdata,
+    });
+
+    console.log(`Successfully created user: ${newUser.username}`);
+
+    return res.status(201).json({
+      success: true,
+      message: "User created successfully",
+      user: newUser,
+    });
+  } catch (error) {
+    console.error("CreateUser controller error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+
 module.exports = {
   getUser,
+  getAllUsers,
+  createUser,
   resetPassword,
   generateResetCode,
 };

@@ -23,6 +23,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use("/internal/sso", require("./routes/authRoutes"));
+app.use("/api", require("./routes/authRoutes"));
 
 // Health check
 app.get("/api/health", (req, res) => {
